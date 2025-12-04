@@ -1,0 +1,89 @@
+%% ================== Three-loop cascaded steering control ====================
+clear; clc;
+s = tf('s');
+
+%% -------------------- 1. Motor + steering rack (inner plant) ---------------
+Je = 6.9;
+be = 71.13;
+N  = 21;
+Kt = 0.0259;
+
+G_delta = N*Kt / (Je*s^2 + be*s);   % v -> δ
+
+%% -------------------- 2. Lateral dynamics (δ -> ψdot) ----------------------
+Vcar = 15;                     % vehicle speed [m/s]  <<< adjust if needed
+
+A = 654.52 / Vcar;
+B = (102093.75 - 39.1667*Vcar^2) / Vcar^2;
+C = 143.33;
+D = 34375 / Vcar;
+
+G_lat = (C*s + D) / (s^2 + A*s + B);  % δ -> ψdot
+G_int = 1/s;                          % ψdot -> ψ  (this is the 1/s block)
+
+%% -------------------- 3. Tuned controller gains ----------------------------
+% Inner loop (δ control, PD)
+KD1 = 7.15e2;          % ≈ 714.97
+KP1 = 2.20e4;          % ≈ 2.202e4
+
+% Middle loop (ψdot control, P only here)
+KD2 = 0;
+KP2 = 1;
+
+% Outer loop (ψ control, PI: K_P3 s + K_I)
+KP3 = 0;
+KI  = 10;
+
+C1 = KD1*s + KP1;      % K_D1 s + K_P1
+C2 = KD2*s + KP2;      % K_D2 s + K_P2
+C3 = KP3*s + KI;       % K_P3 s + K_I
+
+%% -------------------- 4. Inner loop: δ_ref -> δ ----------------------------
+P1 = G_delta;
+T1 = feedback(C1*P1, 1);       % closed loop: δ_ref -> δ
+
+%% -------------------- 5. Middle loop: ψdot_ref -> ψdot ---------------------
+P2 = T1 * G_lat;
+T2 = feedback(C2*P2, 1);       % closed loop: ψdot_ref -> ψdot
+
+%% -------------------- 6. Outer loop: ψ_ref -> ψ ----------------------------
+P3 = T2 * G_int;               % includes the 1/s integrator
+T3 = feedback(C3*P3, 1);       % FINAL closed loop: ψ_ref -> ψ
+
+%% -------------------- 7. Closed-loop eigenvalues (poles) -------------------
+figure;
+pzmap(T3); grid on;
+title('Closed-loop poles of \psi_{ref} \rightarrow \psi');
+
+% If you want the exact values as text:
+disp('Closed-loop poles (eigenvalues):');
+disp(pole(T3));
+
+%% -------------------- 8. Bode plot of closed-loop system -------------------
+figure;
+bode(T3);
+grid on;
+title('Bode plot: \psi_{ref} \rightarrow \psi');
+
+%% -------------------- 9. Heading command vs heading response ---------------
+t      = 0:0.001:2;            % time vector [s]
+psi_ref = ones(size(t));       % 1 rad step in heading
+
+[psi, t_out] = lsim(T3, psi_ref, t);
+
+figure;
+plot(t_out, psi_ref, '--', 'LineWidth', 1.5); hold on;
+plot(t_out, psi, 'LineWidth', 2);
+grid on;
+xlabel('Time [s]');
+ylabel('Heading \psi [rad]');
+legend('\psi_{ref} (command)', '\psi (vehicle)', 'Location', 'Best');
+title('Heading command vs vehicle heading (closed loop)');
+
+%% -------------------- 10. Check step characteristics (optional) ------------
+figure;
+step(T3);
+grid on;
+title('Step response: \psi_{ref} \rightarrow \psi');
+info = stepinfo(T3);
+disp(info);   % look at SettlingTime and Overshoot
